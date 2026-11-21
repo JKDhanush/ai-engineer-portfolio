@@ -1,0 +1,32 @@
+"""App settings, read from environment variables (and a .env file when running locally).
+
+Why pydantic-settings: every setting is typed and validated at startup, so a typo'd
+or missing variable fails loudly on boot instead of deep inside a request.
+"""
+
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=("../.env", ".env"),  # works from backend/ (venv) or project root
+        extra="ignore",
+    )
+
+    app_name: str = "ComplianceIQ"
+    environment: str = "local"
+    log_level: str = "INFO"
+
+    database_url: str = "postgresql://complianceiq:complianceiq@localhost:5432/complianceiq"
+    db_pool_min_size: int = 2
+    db_pool_max_size: int = 10
+
+    redis_url: str = "redis://localhost:6379/0"
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """Build settings once and reuse them (env vars don't change while the app runs)."""
+    return Settings()
