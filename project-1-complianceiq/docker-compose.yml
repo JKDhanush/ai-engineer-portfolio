@@ -1,0 +1,59 @@
+# ComplianceIQ local stack: Postgres (+pgvector), Redis, and the FastAPI api.
+# Run from this folder:  docker compose up --build
+name: complianceiq
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17          # official Postgres 17 + the pgvector extension pre-installed
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-complianceiq}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-complianceiq}
+      POSTGRES_DB: ${POSTGRES_DB:-complianceiq}
+    ports:
+      - "5432:5432"                        # exposed so scripts in your local venv (ingestion, evals) can reach it
+    volumes:
+      - pgdata:/var/lib/postgresql/data    # named volume: data survives container restarts
+      - ./backend/db/init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro   # runs ONLY on first start of an empty volume
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]   # persist cache to disk between restarts
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ./backend
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Inside Docker, services reach each other by SERVICE NAME ("postgres", "redis"), not localhost.
+      # These override any DATABASE_URL / REDIS_URL in .env (which are for running Python on the host).
+      DATABASE_URL: postgresql://${POSTGRES_USER:-complianceiq}:${POSTGRES_PASSWORD:-complianceiq}@postgres:5432/${POSTGRES_DB:-complianceiq}
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy         # wait until Postgres actually accepts connections
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend/app:/app/app             # dev only: edit code on your laptop, container sees it instantly
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+volumes:
+  pgdata:
+  redisdata:

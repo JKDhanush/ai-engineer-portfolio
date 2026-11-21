@@ -1,0 +1,6 @@
+# M0 runtime dependencies. We'll move to a uv lockfile (exact pinned versions) in M1.
+fastapi>=0.115
+uvicorn[standard]>=0.32
+asyncpg>=0.30
+redis>=5.2
+pydantic-settings>=2.6
