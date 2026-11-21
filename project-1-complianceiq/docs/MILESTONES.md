@@ -1,6 +1,6 @@
 # ComplianceIQ — Milestones
 
-## M0 — Setup ⏳
+## M0 — Setup ✅ (2026-11-21)
 - [x] Linux dev environment: Docker Engine + Compose, Git + GitHub SSH, uv + Python 3.12, VS Code, AWS CLI
 - [x] Repo structure (monorepo), .gitignore, .gitattributes
 - [x] docker-compose: Postgres 17 + pgvector, Redis 7, api (healthchecks, hot reload)
@@ -8,7 +8,7 @@
 - [x] FastAPI skeleton: lifespan, asyncpg pool, async Redis, `/health`
 - [x] ADR-001…004
 - [x] `docker compose up --build`, then `/health` returns postgres ok + pgvector 0.8.7 + redis ok
-- [ ] First commits pushed to GitHub
+- [x] First commits pushed to GitHub: https://github.com/JKDhanush/ai-engineer-portfolio
 
 **Lessons from M0**
 - Docker's init scripts (`/docker-entrypoint-initdb.d`) run only on an **empty** volume. After a failed first boot, run `make reset` before retrying.
