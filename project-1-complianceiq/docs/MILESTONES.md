@@ -7,8 +7,13 @@
 - [x] Schema: `documents`, `chunks` (HNSW cosine index, weighted tsvector + GIN)
 - [x] FastAPI skeleton: lifespan, asyncpg pool, async Redis, `/health`
 - [x] ADR-001…004
-- [ ] `docker compose up --build`, then `/health` returns postgres ok + redis ok
+- [x] `docker compose up --build`, then `/health` returns postgres ok + pgvector 0.8.7 + redis ok
 - [ ] First commits pushed to GitHub
+
+**Lessons from M0**
+- Docker's init scripts (`/docker-entrypoint-initdb.d`) run only on an **empty** volume. After a failed first boot, run `make reset` before retrying.
+- Files mounted into containers must be readable by the container's user (`chmod 644`).
+- A health check must test what the app actually needs (pgvector), not just "the DB answers".
 
 ## M1 — Ingestion pipeline
 - [ ] ~50 RBI KYC/AML circulars in `data/raw/` + committed `manifest.csv`
