@@ -1,0 +1,32 @@
+# --- Secrets: never commit ---
+.env
+.env.*
+!.env.example
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# --- Data: raw PDFs and processed outputs stay local (a manifest is committed instead) ---
+project-1-complianceiq/data/raw/*
+!project-1-complianceiq/data/raw/.gitkeep
+project-1-complianceiq/data/processed/
+
+# --- Frontend (M8) ---
+node_modules/
+.next/
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+.DS_Store
+*.log
