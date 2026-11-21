@@ -42,3 +42,10 @@ Decisions are never deleted; if one changes, a new ADR supersedes it.
 - **Decision:** Docker Engine + Compose plugin (not Docker Desktop). uv manages the Python version (3.12) and installs packages, locally and inside the Docker image.
 - **Alternatives:** Docker Desktop adds a VM that native Linux doesn't need. deadsnakes PPA + pip is slower and needs a separate Python install method.
 - **Consequences:** + the laptop matches the EC2/ECS runtime, the local venv matches the container's Python, and installs are roughly 10× faster. − uv is newer than pip, so the team needs to know it (widely adopted by 2026).
+
+## ADR-005: Free, local-first model stack (GPU embeddings + reranker, local/free-tier LLM)
+- **Date:** 2026-11-21 · **Status:** Accepted
+- **Context:** Budget is ₹0 until deployment. The dev laptop has an RTX 3050 Laptop GPU with 6 GB VRAM (CUDA 13.2). The schema already fixes embeddings at 1024 dims.
+- **Decision:** Embeddings use **BAAI/bge-m3** (1024-d) and reranking uses **BAAI/bge-reranker-v2-m3**, both run locally on the GPU. Generation uses **Ollama** (a 4-bit 7–8B model) with a **free-tier API** as fallback, behind our own provider interface. Bedrock is added as a provider at M7/M9.
+- **Alternatives:** Bedrock Titan / Cohere embeddings would cost per token and need network on every re-index. OpenAI embeddings would mean a paid account plus 1536/3072 dims (a schema change).
+- **Consequences:** + ₹0 cost, unlimited re-indexing while tuning chunking, strong open models, and the provider abstraction is exercised from day one. − 6 GB VRAM means models run one at a time (no LLM and reranker together at full size), and local LLM quality is below frontier APIs, which the M6 evals will quantify. The embedding model is now part of the data contract: changing it means re-embedding everything.
