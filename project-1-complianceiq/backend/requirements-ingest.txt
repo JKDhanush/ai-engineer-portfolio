@@ -1,0 +1,8 @@
+# Offline ingestion + ML deps. Installed ONLY in the local venv, never in the API image
+# (torch alone is ~2 GB; the API container must stay small and fast to start).
+-r requirements.txt
+pymupdf>=1.25          # fast, accurate PDF text + layout + table detection
+pymupdf4llm>=0.0.20    # PDF -> Markdown with tables preserved (headings, lists, tables)
+sentence-transformers>=3.3   # loads bge-m3 / bge-reranker on the GPU
+torch                  # PyPI Linux wheels ship with CUDA built in
+tqdm                   # progress bars for long batch jobs
