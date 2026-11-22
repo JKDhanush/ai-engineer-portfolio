@@ -1,0 +1,4 @@
+# Developer tools: tests and linting. Local venv only.
+-r requirements-ingest.txt
+pytest>=8.3
+ruff>=0.8

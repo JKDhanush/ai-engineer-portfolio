@@ -1,0 +1,15 @@
+# Tool configuration for the backend (the app itself is installed via requirements*.txt)
+
+[tool.pytest.ini_options]
+pythonpath = ["."]          # lets tests `import ingest...` and `import app...` from backend/
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]   # pycodestyle, pyflakes, import order, pyupgrade, bugbear
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*" = ["E501"]   # one-off exploration scripts: long regexes/prints are fine
