@@ -15,8 +15,12 @@
 - Files mounted into containers must be readable by the container's user (`chmod 644`).
 - A health check must test what the app actually needs (pgvector), not just "the DB answers".
 
-## M1 — Ingestion pipeline
-- [ ] ~50 RBI KYC/AML circulars in `data/raw/` + committed `manifest.csv`
+## M1 — Ingestion pipeline ⏳
+- [x] Corpus: 22 RBI KYC documents (14 docs + 8 annexes) in `data/raw/`, listed in committed `data/manifest.csv`
+  - Covers the full version story: KYC Master Direction 2016 and its 2024–25 amendments → repealed 28 Nov 2025 →
+    entity-wise KYC Directions 2025 (Commercial Banks, NBFCs, SFBs, UCBs) → their Dec 2025 / Sep 2026 amendments
+  - RBI's document server uses an F5 JavaScript bot challenge, so scripted downloads get HTML. We fetch through a
+    real browser (`import_downloads.py --open`), then the script validates (`%PDF`), renames and fingerprints (SHA-256) each file.
 - [ ] Layout-aware PDF + table parsing
 - [ ] Metadata extraction (circular no., date, department, supersedes)
 - [ ] Parent-child chunking + contextual headers
