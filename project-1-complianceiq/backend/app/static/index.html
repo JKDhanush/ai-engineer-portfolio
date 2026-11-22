@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ComplianceIQ · RBI KYC copilot</title>
+<style>
+  :root { --bg:#f7f7f5; --card:#fff; --ink:#1d1d1f; --muted:#6b6b70; --line:#e4e4e0; --accent:#1f5f8b; --warn:#9a5b00; --ok:#2e7d4f; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width:860px; margin:0 auto; padding:32px 20px 80px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 24px; }
+  form { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  textarea { width:100%; min-height:70px; border:1px solid var(--line); border-radius:8px; padding:10px; font:inherit; resize:vertical; }
+  .row { display:flex; gap:12px; align-items:center; margin-top:10px; flex-wrap:wrap; }
+  select, button { font:inherit; padding:7px 12px; border-radius:8px; border:1px solid var(--line); background:#fff; }
+  button { background:var(--accent); color:#fff; border:none; cursor:pointer; margin-left:auto; }
+  button:disabled { opacity:.5; cursor:wait; }
+  label { color:var(--muted); font-size:14px; }
+  .examples { margin:10px 0 0; font-size:13px; color:var(--muted); }
+  .examples a { color:var(--accent); cursor:pointer; margin-right:12px; }
+  #answer { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin-top:20px; display:none; }
+  #answer .meta { color:var(--muted); font-size:12px; margin-top:12px; }
+  .cite { color:var(--accent); font-weight:600; cursor:pointer; }
+  h2 { font-size:15px; margin:26px 0 10px; color:var(--muted); font-weight:600; }
+  .src { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:10px; }
+  .src.cited { border-left:4px solid var(--accent); }
+  .src .head { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; }
+  .src .id { font-weight:700; color:var(--accent); }
+  .src .title { font-weight:600; }
+  .badge { font-size:11px; padding:1px 7px; border-radius:99px; border:1px solid; }
+  .badge.active { color:var(--ok); } .badge.superseded { color:var(--warn); }
+  .src .path { color:var(--muted); font-size:13px; margin-top:2px; }
+  .src details { margin-top:6px; font-size:13px; }
+  .src pre { white-space:pre-wrap; font:13px/1.5 ui-monospace,monospace; background:var(--bg); padding:10px; border-radius:6px; max-height:320px; overflow:auto; }
+  .err { color:#b00020; }
+</style>
+</head>
+<body>
+<main>
+  <h1>ComplianceIQ</h1>
+  <p class="sub">Ask about RBI KYC / AML rules. Answers cite the exact circular and paragraph.</p>
+
+  <form id="f">
+    <textarea id="q" placeholder="e.g. How often must banks update KYC for high-risk customers?"></textarea>
+    <div class="row">
+      <label>Entity
+        <select id="entity">
+          <option value="">All</option>
+          <option value="commercial_banks">Commercial banks</option>
+          <option value="nbfcs">NBFCs</option>
+          <option value="small_finance_banks">Small finance banks</option>
+          <option value="urban_coop_banks">Urban co-operative banks</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="sup" checked> include superseded</label>
+      <button id="go" type="submit">Ask</button>
+    </div>
+    <div class="examples">Try:
+      <a>How often must KYC be updated for high-risk customers?</a>
+      <a>What are the V-CIP requirements?</a>
+      <a>Who is a beneficial owner of a company?</a>
+    </div>
+  </form>
+
+  <div id="answer"></div>
+  <div id="sources"></div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => (s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function render(md) {
+  // tiny markdown: escape, **bold**, bullet lines, [S1] citations, paragraphs
+  let h = esc(md).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+  h = h.replace(/\[S(\d+)\]/g, '<span class="cite" onclick="document.getElementById(\'S$1\').scrollIntoView({behavior:\'smooth\'})">[S$1]</span>');
+  const lines = h.split("\n");
+  let out = "", inList = false;
+  for (const l of lines) {
+    const m = l.match(/^\s*[-*•]\s+(.*)/);
+    if (m) { if (!inList) { out += "<ul>"; inList = true; } out += `<li>${m[1]}</li>`; }
+    else { if (inList) { out += "</ul>"; inList = false; } if (l.trim()) out += `<p>${l}</p>`; }
+  }
+  return out + (inList ? "</ul>" : "");
+}
+
+document.querySelectorAll(".examples a").forEach((a) => a.onclick = () => { $("q").value = a.textContent; $("f").requestSubmit(); });
+
+$("f").onsubmit = async (e) => {
+  e.preventDefault();
+  const question = $("q").value.trim();
+  if (question.length < 3) return;
+  $("go").disabled = true; $("go").textContent = "Thinking…";
+  $("answer").style.display = "block"; $("answer").innerHTML = "<span class='meta'>Searching the RBI documents and drafting an answer…</span>";
+  $("sources").innerHTML = "";
+  try {
+    const res = await fetch("/ask", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, entity: $("entity").value || null, include_superseded: $("sup").checked }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || res.statusText);
+    $("answer").innerHTML = render(data.answer) +
+      `<div class="meta">${esc(data.model)} · retrieval ${data.timings_ms.retrieval} ms · generation ${data.timings_ms.generation} ms</div>`;
+    $("sources").innerHTML = "<h2>Sources</h2>" + data.sources.map((s) => `
+      <div class="src ${s.cited ? "cited" : ""}" id="${s.id}">
+        <div class="head"><span class="id">${s.id}</span><span class="title">${esc(s.title)}</span>
+          <span class="badge ${s.status}">${s.status}</span></div>
+        <div class="path">${esc(s.circular_no)} · ${esc(s.issued_on)} · ${esc(s.section_path)} · p. ${esc(s.pages)}</div>
+        ${s.status !== "active" ? `<div class="path">⚠ ${esc(s.status_reason)}</div>` : ""}
+        ${s.also_in.length ? `<div class="path">Same text also in: ${esc(s.also_in.join("; "))}</div>` : ""}
+        <details><summary>Show paragraph</summary><pre>${esc(s.text)}</pre></details>
+      </div>`).join("");
+  } catch (err) {
+    $("answer").innerHTML = `<p class="err">${esc(err.message)}</p>`;
+  } finally {
+    $("go").disabled = false; $("go").textContent = "Ask";
+  }
+};
+</script>
+</body>
+</html>

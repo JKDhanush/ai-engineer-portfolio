@@ -3,6 +3,7 @@
 [tool.pytest.ini_options]
 pythonpath = ["."]          # lets tests `import ingest...` and `import app...` from backend/
 testpaths = ["tests"]
+markers = ["slow: opens real 100-page PDFs (~1 min). Skip while coding with: pytest -m 'not slow'"]
 
 [tool.ruff]
 line-length = 120

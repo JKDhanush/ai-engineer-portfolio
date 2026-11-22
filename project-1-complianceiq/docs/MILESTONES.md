@@ -21,12 +21,16 @@
     entity-wise KYC Directions 2025 (Commercial Banks, NBFCs, SFBs, UCBs) → their Dec 2025 / Sep 2026 amendments
   - RBI's document server uses an F5 JavaScript bot challenge, so scripted downloads get HTML. We fetch through a
     real browser (`import_downloads.py --open`), then the script validates (`%PDF`), renames and fingerprints (SHA-256) each file.
-- [ ] Layout-aware PDF + table parsing
-- [ ] Metadata extraction (circular no., date, department, supersedes)
-- [ ] Parent-child chunking + contextual headers
-- [ ] Dedupe (file hash + chunk hash)
-- [ ] Embeddings + load into Postgres
-- [ ] Version graph (active / amended / superseded)
+- [x] Layout-aware PDF + table parsing (`ingest/pdf_reader.py`: bold/size/footnotes/tables; drops TOC, page numbers, masthead, "Withdrawn" stamps)
+- [x] Metadata extraction from the header: circular nos., date, title (`ingest/metadata.py`)
+- [x] Structure tree: Chapter > Section > Para > clauses, with citation paths like `Para 38(1)(ii)` (`ingest/structure.py`)
+- [x] Parent-child chunking + contextual headers + tables + amendment footnotes (`ingest/chunker.py`)
+- [x] Dedupe: file SHA-256 (idempotent ingest) + chunk content hash (collapsed at retrieval)
+- [x] bge-m3 embeddings on GPU + transactional load into Postgres (`scripts/ingest.py`, `ingest/loader.py`)
+- [~] Version status: simple rule (pre-repeal 2016 MD family / 'Withdrawn' stamp = superseded). Full graph in M5
+
+**MVP slice (pulled forward):** hybrid search (pgvector + full-text, RRF) `/search`, grounded answers with
+citations via local Ollama `/ask`, and a minimal web page at `/`. Evals (M2) come next to measure it.
 
 ## M2 — Golden eval set + vector baseline
 ## M3 — Hybrid + RRF + rerank + ablation table

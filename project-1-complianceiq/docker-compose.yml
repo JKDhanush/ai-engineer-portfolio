@@ -1,5 +1,5 @@
 # ComplianceIQ local stack: Postgres (+pgvector), Redis, and the FastAPI api.
-# Run from this folder:  docker compose up --build
+# Run from this folder:  make up   (Postgres + Redis)   then   make api   (API on the host, see ADR-007)
 name: complianceiq
 
 services:
@@ -33,7 +33,11 @@ services:
       timeout: 3s
       retries: 10
 
+  # Optional containerised API (`make docker-api`). In development the API runs on the host from the venv
+  # (`make api`) so it can use the GPU for embeddings (ADR-007). This image has no torch, so it can serve
+  # /health but not /search or /ask.
   api:
+    profiles: ["docker-api"]
     build: ./backend
     env_file:
       - path: .env
@@ -43,6 +47,10 @@ services:
       # These override any DATABASE_URL / REDIS_URL in .env (which are for running Python on the host).
       DATABASE_URL: postgresql://${POSTGRES_USER:-complianceiq}:${POSTGRES_PASSWORD:-complianceiq}@postgres:5432/${POSTGRES_DB:-complianceiq}
       REDIS_URL: redis://redis:6379/0
+      LOAD_EMBEDDER: "false"
+      OLLAMA_URL: http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8000:8000"
     depends_on:

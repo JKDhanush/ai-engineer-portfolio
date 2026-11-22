@@ -71,3 +71,10 @@ Decisions are never deleted; if one changes, a new ADR supersedes it.
   8. **Duplicates are kept, not deleted:** every chunk stores a normalized `content_hash` plus the document's `entity_type`. Retrieval filters by entity and collapses identical hashes, because an NBFC's rule and a bank's rule can be textually identical yet still need separate citations.
 - **Alternatives:** fixed-size character/token windows (simple, but cut rules mid-clause and lose citation anchors); generic PDF→Markdown (loses the bold/footnote signals we rely on); deleting cross-document duplicates at ingest (breaks per-entity citations and ACLs).
 - **Consequences:** + chunks align with how compliance officers cite rules; precise `section_path` citations; amendment history captured for free. − the parser is RBI-specific (heading/numbering regexes); SEBI documents will need their own rules, so the parser is designed as a pluggable class per regulator. Chunk-size targets are a starting point and will be tuned against the M2 eval set.
+
+## ADR-007: In development the API runs on the host; Docker runs only the data services
+- **Date:** 2026-11-22 · **Status:** Accepted
+- **Context:** `/search` and `/ask` must embed the question with bge-m3 on the GPU (ADR-005), and the LLM runs in Ollama on the host. The API image is deliberately slim (no torch, ~2 GB smaller), and GPU access from a container needs the NVIDIA Container Toolkit.
+- **Decision:** `make up` starts Postgres + Redis in Docker; `make api` runs FastAPI from the local venv (`uvicorn --reload`) with GPU access. The containerised API stays available behind a Compose profile (`make docker-api`) for health checks.
+- **Alternatives:** put torch + CUDA in the API image and use the NVIDIA Container Toolkit (heavier image, more setup, revisit at M9); call a hosted embedding API (costs money, breaks the ₹0 budget).
+- **Consequences:** + fast edit-reload loop, GPU available, simple setup. − dev and prod run the API differently; at M9 we decide between a GPU container, a separate embedding service, or a hosted embedding API, and the `/health` check already reports `embedder` and `llm` separately to support that.

@@ -25,6 +25,16 @@ class Settings(BaseSettings):
 
     redis_url: str = "redis://localhost:6379/0"
 
+    # Retrieval (ADR-005: local bge-m3 on the GPU). The slim Docker image has no torch, so it sets this false.
+    load_embedder: bool = True
+    embed_device: str = "cuda"
+    top_k: int = 5                 # parent chunks sent to the LLM
+
+    # Generation: a local model served by Ollama (ollama.com), e.g. `ollama pull phi4-mini`
+    ollama_url: str = "http://localhost:11434"
+    llm_model: str = "phi4-mini"
+    llm_timeout_s: float = 180.0
+
 
 @lru_cache
 def get_settings() -> Settings:

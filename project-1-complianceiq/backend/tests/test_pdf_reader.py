@@ -8,6 +8,7 @@ import pytest
 from ingest.pdf_reader import read_pdf
 
 RAW = Path(__file__).resolve().parents[2] / "data" / "raw"
+pytestmark = pytest.mark.slow  # every test in this file reads real PDFs
 
 
 def load(name: str):
