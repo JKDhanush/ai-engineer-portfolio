@@ -19,7 +19,7 @@ print(f"GPU: {props.name} | VRAM: {props.total_memory / 1024**3:.1f} GB")
 t0 = time.perf_counter()
 model = SentenceTransformer("BAAI/bge-m3", device="cuda")
 model.half()  # fp16: half the VRAM, ~2x faster, negligible quality loss for embeddings
-print(f"bge-m3 loaded in {time.perf_counter() - t0:.1f}s | dim = {model.get_sentence_embedding_dimension()}")
+print(f"bge-m3 loaded in {time.perf_counter() - t0:.1f}s | dim = {model.get_embedding_dimension()}")
 
 texts = [
     "Banks must update KYC of high-risk customers at least once every two years.",

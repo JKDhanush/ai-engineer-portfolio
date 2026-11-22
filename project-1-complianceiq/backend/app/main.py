@@ -65,7 +65,12 @@ async def health(request: Request) -> JSONResponse:
     except Exception as exc:
         checks["redis"] = f"error: {type(exc).__name__}"
 
-    healthy = checks.get("postgres") == "ok" and checks.get("redis") == "ok"
+    # pgvector missing means the schema never loaded, so the app can't do retrieval: report unhealthy
+    healthy = (
+        checks.get("postgres") == "ok"
+        and checks.get("pgvector", "missing") != "missing"
+        and checks.get("redis") == "ok"
+    )
     return JSONResponse(
         status_code=200 if healthy else 503,
         content={"status": "ok" if healthy else "degraded", "version": app.version, "checks": checks},
