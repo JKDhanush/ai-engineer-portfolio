@@ -1,20 +1,39 @@
-"""Hybrid retrieval: vector search + keyword search, merged with Reciprocal Rank Fusion (RRF).
+"""Retrieval: keyword search, vector search, Reciprocal Rank Fusion, optional cross-encoder reranking.
 
-Why both:
-- vector search finds MEANING ("periodic updation" ~ "update KYC every 2 years"),
-- keyword search finds EXACT terms (circular numbers, "V-CIP", "Section 51A") that embeddings blur.
-RRF merges the two ranked lists without having to compare their incompatible scores:
-    score(chunk) = sum over lists of 1 / (k + rank)      (k = 60, the standard constant)
+Modes (compared in the ablation table, evals/run_retrieval_eval.py):
+  "bm25"            keyword search only (Postgres full-text; ts_rank_cd, BM25-like)
+  "vector"          semantic search only (pgvector HNSW, cosine)
+  "hybrid"          both, merged with equal-weight RRF
+  "hybrid_weighted" both, RRF with keyword results down-weighted (BM25_WEIGHT)
+  "vector_rerank"   vector candidates re-scored by a cross-encoder (bge-reranker-v2-m3)
+  "hybrid_rerank"   hybrid candidates re-scored by the cross-encoder
+
+First ablation on the RTX 3050 (165 questions): vector beat equal-weight hybrid (MRR 0.873 vs 0.761): keyword
+search is weak here because questions are phrased differently from regulations, and equal-weight RRF lets weak
+keyword hits push good vector hits down. The reranker recovered it (MRR 0.908). Hence the weighted variants.
+
+Why both searches: vector search finds MEANING ("periodic updation" ~ "update KYC every 2 years"); keyword
+search finds EXACT terms (circular numbers, "V-CIP", "Section 51A") that embeddings blur.
+RRF merges ranked lists without comparing their incompatible scores:
+    score(chunk) = sum over lists of 1 / (k + rank)        (k = 60, the standard constant)
+A cross-encoder reads the question and a passage TOGETHER, so it judges relevance far better than
+comparing two separately computed vectors, but it's too slow to run over the whole corpus. So it only
+re-orders the ~30 best hybrid candidates.
 """
 
-from dataclasses import dataclass
+import asyncio
+import re
+from collections.abc import Callable
+from dataclasses import dataclass, field
 
 import asyncpg
 
 RRF_K = 60
-CANDIDATES = 40  # how many children each search returns before fusion
+CANDIDATES = 40       # children each search returns before fusion
+RERANK_TOP = 20       # fused candidates the cross-encoder re-scores (latency grows linearly with this)
+BM25_WEIGHT = 0.3     # keyword list weight in "hybrid_weighted" (vector list = 1.0)
+NEAR_DUP = 0.85       # word-shingle Jaccard above which two paragraphs count as the same rule
 
-# Optional entity filter: documents for that entity, plus documents that apply to all regulated entities.
 _ENTITY_FILTER = "($2::text IS NULL OR d.metadata->>'entity_type' IN ($2, 'all_REs', 'payment_systems'))"
 _STATUS_FILTER = "($4::bool OR d.status = 'active')"
 
@@ -34,18 +53,23 @@ ORDER BY ts_rank_cd(c.tsv, to_tsquery('english', q.t)) DESC
 LIMIT $3"""
 
 DETAILS_SQL = """
-SELECT c.id AS child_id, c.content AS child_text, c.content_hash, c.section_path AS child_path,
+SELECT c.id AS child_id, c.content AS child_text, c.context_header AS child_header, c.content_hash,
        p.id AS parent_id, p.content AS parent_text, p.section_path, p.page_start, p.page_end,
        d.title, d.circular_no, d.issued_on, d.status, d.source_file,
-       d.metadata->>'entity_type' AS entity_type, d.metadata->>'status_reason' AS status_reason
+       d.metadata->>'doc_id' AS doc_id, d.metadata->>'entity_type' AS entity_type,
+       d.metadata->>'status_reason' AS status_reason, d.metadata->>'pdf_url' AS pdf_url
 FROM chunks c JOIN chunks p ON p.id = c.parent_id JOIN documents d ON d.id = c.document_id
 WHERE c.id = ANY($1::uuid[])"""
+
+MODES = ("bm25", "vector", "hybrid", "hybrid_weighted", "vector_rerank", "hybrid_rerank")
+RERANK_MODES = ("vector_rerank", "hybrid_rerank")
 
 
 @dataclass
 class Hit:
     parent_id: str
     score: float
+    doc_id: str
     title: str
     circular_no: str | None
     issued_on: str | None
@@ -54,53 +78,93 @@ class Hit:
     entity_type: str | None
     section_path: str
     pages: str
+    pdf_url: str | None
     parent_text: str
     matched_text: str
-    also_in: list[str]
+    also_in: list[str] = field(default_factory=list)
 
 
-def rrf(*ranked_lists: list) -> dict:
+def rrf(*ranked_lists: list, weights: list[float] | None = None) -> dict:
+    weights = weights or [1.0] * len(ranked_lists)
     scores: dict = {}
-    for ranked in ranked_lists:
+    for ranked, w in zip(ranked_lists, weights, strict=True):
         for rank, item in enumerate(ranked, start=1):
-            scores[item] = scores.get(item, 0.0) + 1.0 / (RRF_K + rank)
+            scores[item] = scores.get(item, 0.0) + w / (RRF_K + rank)
     return scores
 
 
-async def hybrid_search(pool: asyncpg.Pool, query: str, query_vec: str, *, k: int = 5,
-                        entity: str | None = None, include_superseded: bool = True) -> list[Hit]:
+def _shingles(text: str, n: int = 5) -> set[str]:
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    # Entity names differ between otherwise identical rules ("the bank" vs "the NBFC"): drop them.
+    words = [w for w in words if w not in {"bank", "banks", "nbfc", "nbfcs", "sfb", "ucb", "re", "res"}]
+    return {" ".join(words[i:i + n]) for i in range(max(len(words) - n + 1, 1))}
+
+
+def _jaccard(a: set, b: set) -> float:
+    return len(a & b) / len(a | b) if a and b else 0.0
+
+
+async def search(
+    pool: asyncpg.Pool, query: str, query_vec: str | None, *, mode: str = "hybrid", k: int = 5,
+    entity: str | None = None, include_superseded: bool = True,
+    reranker: Callable[[str, list[str]], list[float]] | None = None, rerank_top: int = RERANK_TOP,
+) -> list[Hit]:
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}")
+    use_vector = mode != "bm25"
+    use_keyword = mode in ("bm25", "hybrid", "hybrid_weighted", "hybrid_rerank")
     async with pool.acquire() as conn:
-        vec_ids = [r["id"] for r in await conn.fetch(VECTOR_SQL, query_vec, entity, CANDIDATES, include_superseded)]
-        kw_ids = [r["id"] for r in await conn.fetch(KEYWORD_SQL, query, entity, CANDIDATES, include_superseded)]
-        fused = rrf(vec_ids, kw_ids)
+        lists, weights = [], []
+        if use_vector:
+            lists.append([r["id"] for r in await conn.fetch(VECTOR_SQL, query_vec, entity, CANDIDATES,
+                                                            include_superseded)])
+            weights.append(1.0)
+        if use_keyword:
+            lists.append([r["id"] for r in await conn.fetch(KEYWORD_SQL, query, entity, CANDIDATES,
+                                                            include_superseded)])
+            weights.append(BM25_WEIGHT if mode == "hybrid_weighted" else 1.0)
+        fused = rrf(*lists, weights=weights)
         ranked = sorted(fused, key=fused.get, reverse=True)
         rows = {r["child_id"]: r for r in await conn.fetch(DETAILS_SQL, ranked)}
 
-    # Walk children best-first. Identical text in several entity directions -> keep the best one and
-    # note where else it appears. Several children of one paragraph -> one parent.
-    hits: dict = {}
-    seen_text: dict = {}
+    ranked = [cid for cid in ranked if cid in rows]
+    scores = dict(fused)
+    if mode in RERANK_MODES and reranker is not None and ranked:
+        top = ranked[:rerank_top]
+        passages = [f"{rows[c]['child_header']}\n{rows[c]['child_text']}" for c in top]
+        rerank_scores = await asyncio.to_thread(reranker, query, passages)  # GPU work off the event loop
+        scores = {c: s for c, s in zip(top, rerank_scores, strict=True)}
+        ranked = sorted(top, key=scores.get, reverse=True)
+    return _group(ranked, rows, scores, k)
+
+
+def _group(ranked: list, rows: dict, scores: dict, k: int) -> list[Hit]:
+    """Children best-first -> distinct parents. The same rule repeated in several entity directions is kept
+    once (best-ranked copy), with the other copies listed in `also_in`, so the LLM sees k DIFFERENT rules."""
+    hits: list[Hit] = []
+    by_parent: dict = {}
+    shingles: list[set] = []
     for cid in ranked:
-        r = rows.get(cid)
-        if r is None:
+        r = rows[cid]
+        if r["parent_id"] in by_parent:                 # another child of a paragraph we already have
             continue
-        label = f"{r['title']} ({r['entity_type']})"
-        if r["content_hash"] in seen_text:
-            first = hits.get(seen_text[r["content_hash"]])
-            if first and label not in first.also_in and label != f"{first.title} ({first.entity_type})":
-                first.also_in.append(label)
-            continue
-        seen_text[r["content_hash"]] = r["parent_id"]
-        if r["parent_id"] in hits:
-            hits[r["parent_id"]].score += fused[cid]
+        sh = _shingles(r["parent_text"])
+        dup = next((h for h, s in zip(hits, shingles, strict=True) if _jaccard(sh, s) >= NEAR_DUP), None)
+        if dup is not None:
+            if r["title"] != dup.title and r["title"] not in dup.also_in:
+                dup.also_in.append(r["title"])
             continue
         if len(hits) >= k:
             continue
         pages = f"{r['page_start']}" if r["page_start"] == r["page_end"] else f"{r['page_start']}-{r['page_end']}"
-        hits[r["parent_id"]] = Hit(
-            parent_id=str(r["parent_id"]), score=fused[cid], title=r["title"], circular_no=r["circular_no"],
-            issued_on=r["issued_on"].isoformat() if r["issued_on"] else None, status=r["status"],
-            status_reason=r["status_reason"], entity_type=r["entity_type"], section_path=r["section_path"],
-            pages=pages, parent_text=r["parent_text"], matched_text=r["child_text"], also_in=[],
+        hit = Hit(
+            parent_id=str(r["parent_id"]), score=float(scores[cid]), doc_id=r["doc_id"], title=r["title"],
+            circular_no=r["circular_no"], issued_on=r["issued_on"].isoformat() if r["issued_on"] else None,
+            status=r["status"], status_reason=r["status_reason"], entity_type=r["entity_type"],
+            section_path=r["section_path"], pages=pages, pdf_url=r["pdf_url"], parent_text=r["parent_text"],
+            matched_text=r["child_text"],
         )
-    return sorted(hits.values(), key=lambda h: h.score, reverse=True)
+        hits.append(hit)
+        shingles.append(sh)
+        by_parent[r["parent_id"]] = hit
+    return hits

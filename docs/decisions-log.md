@@ -78,3 +78,24 @@ Decisions are never deleted; if one changes, a new ADR supersedes it.
 - **Decision:** `make up` starts Postgres + Redis in Docker; `make api` runs FastAPI from the local venv (`uvicorn --reload`) with GPU access. The containerised API stays available behind a Compose profile (`make docker-api`) for health checks.
 - **Alternatives:** put torch + CUDA in the API image and use the NVIDIA Container Toolkit (heavier image, more setup, revisit at M9); call a hosted embedding API (costs money, breaks the ₹0 budget).
 - **Consequences:** + fast edit-reload loop, GPU available, simple setup. − dev and prod run the API differently; at M9 we decide between a GPU container, a separate embedding service, or a hosted embedding API, and the `/health` check already reports `embedder` and `llm` separately to support that.
+
+## ADR-008: Evaluation-first: a paragraph-level golden set with cross-document equivalence
+- **Date:** 2026-11-23 · **Status:** Accepted
+- **Context:** Without measurement, every retrieval change (reranking, query rewriting, chunk sizes) is a guess. The corpus repeats the same rule in four entity directions and the repealed 2016 Master Direction, under different paragraph numbers (periodic updation is Para 42 / 42 / 43 / 41 / 38).
+- **Decision:** 175 hand-written questions (165 answerable, 10 out-of-scope) in `evals/golden_questions.py`, each pointing at the paragraph that answers it in the Commercial Banks directions. `build_golden.py` finds the equivalent paragraph in every other document by TF-IDF similarity (same annex only for annex paragraphs), so retrieving the rule from any copy counts. Metrics: Hit@1/3/5, MRR, nDCG@10, latency p50/p95, per category, plus a misses list for error analysis.
+- **Alternatives:** LLM-generated questions (fast, but biased toward the generator's phrasing and needs a paid model); chunk-ID labels (break on every re-chunk).
+- **Consequences:** + every later milestone is judged by numbers; labels survive re-chunking. − 175 questions written by one person reflect one person's phrasing; expand with real user questions after launch.
+
+## ADR-009: Cross-encoder reranking over hybrid candidates
+- **Date:** 2026-11-23 · **Status:** Accepted
+- **Context:** RRF fusion helps recall but ranks by agreement, not by relevance to the exact question. Questions often differ from the rule's wording.
+- **Decision:** Re-score the top 30 fused child chunks with `BAAI/bge-reranker-v2-m3` (fp16 on the GPU, ~1.1 GB), then group into parents. The ablation table in `evals/results/retrieval_report.md` must show it earns its latency.
+- **Alternatives:** LLM reranking (slower, costs tokens); no reranking (simpler, lower precision at rank 1).
+- **Consequences:** + higher Hit@1 / MRR, so the LLM sees the right rule first. − ~1.1 GB more VRAM (6 GB card: embedder + reranker + LLM is tight; `USE_RERANKER=false` turns it off) and extra latency per query.
+
+## ADR-010: Streaming answers, deterministic citation self-check, refusal
+- **Date:** 2026-11-23 · **Status:** Accepted
+- **Context:** A 4B local model takes ~20-30 s to write a full answer; users abandon long silent waits. Small models also occasionally cite the wrong source or change a number.
+- **Decision:** `/ask/stream` sends Server-Sent Events (sources first, then tokens, then a `done` event with timings). Every answer is checked by `app/citations.py`: cited sources must exist, sentences need citations, cited sentences' terms and **numbers** must appear in the cited sources. Out-of-scope questions get a fixed refusal; an optional rerank-score threshold refuses before calling the LLM.
+- **Alternatives:** WebSockets (bidirectional, not needed); an LLM-judge on every request (doubles latency and cost; used offline in the M6 evals instead).
+- **Consequences:** + time-to-first-word ~1-2 s, visible warnings on doubtful answers, no invented numbers going unnoticed. − the lexical check can flag correct paraphrases; it warns, it doesn't block.

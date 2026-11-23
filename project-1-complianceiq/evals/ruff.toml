@@ -1,0 +1,4 @@
+extend = "../backend/pyproject.toml"
+
+[lint.per-file-ignores]
+"golden_questions.py" = ["E501"]   # a data file: long question / answer strings are fine

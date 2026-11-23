@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     load_embedder: bool = True
     embed_device: str = "cuda"
     top_k: int = 5                 # parent chunks sent to the LLM
+    use_reranker: bool = True      # cross-encoder over the top hybrid candidates (M3); needs ~1.1 GB more VRAM
+    retrieval_mode: str = "hybrid_rerank"   # best MRR in the ablation (evals/results/retrieval_report.md)
+    min_rerank_score: float = 0.0  # below this top score, refuse without calling the LLM (calibrate from evals)
 
     # Generation: a local model served by Ollama (ollama.com), e.g. `ollama pull phi4-mini`
     ollama_url: str = "http://localhost:11434"

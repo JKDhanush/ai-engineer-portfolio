@@ -15,7 +15,7 @@
 - Files mounted into containers must be readable by the container's user (`chmod 644`).
 - A health check must test what the app actually needs (pgvector), not just "the DB answers".
 
-## M1 — Ingestion pipeline ⏳
+## M1 — Ingestion pipeline ✅
 - [x] Corpus: 22 RBI KYC documents (14 docs + 8 annexes) in `data/raw/`, listed in committed `data/manifest.csv`
   - Covers the full version story: KYC Master Direction 2016 and its 2024–25 amendments → repealed 28 Nov 2025 →
     entity-wise KYC Directions 2025 (Commercial Banks, NBFCs, SFBs, UCBs) → their Dec 2025 / Sep 2026 amendments
@@ -32,9 +32,22 @@
 **MVP slice (pulled forward):** hybrid search (pgvector + full-text, RRF) `/search`, grounded answers with
 citations via local Ollama `/ask`, and a minimal web page at `/`. Evals (M2) come next to measure it.
 
-## M2 — Golden eval set + vector baseline
-## M3 — Hybrid + RRF + rerank + ablation table
-## M4 — Grounded generation + SSE streaming
+## M2 — Golden eval set + retrieval baseline ✅
+- [x] 175 questions (165 answerable + 10 out-of-scope), paragraph-level labels (`evals/golden_questions.py`)
+- [x] Cross-document equivalence: same rule in CB/NBFC/SFB/UCB directions + 2016 MD counts (`evals/build_golden.py`)
+- [x] Metrics: Hit@1/3/5, MRR, nDCG@10, latency, per-category breakdown, misses list (`evals/run_retrieval_eval.py`)
+
+## M3 — Hybrid + RRF + rerank + ablation ✅
+- [x] Retrieval modes: bm25 / vector / hybrid (RRF) / hybrid + cross-encoder rerank (`app/retrieval.py`, `app/rerank.py`)
+- [x] Near-duplicate collapse across entity directions ("same rule also in")
+- [x] Ablation table: `evals/results/retrieval_report.md` (run `make eval` on the GPU machine)
+
+## M4 — Grounded generation + streaming ✅
+- [x] SSE streaming `/ask/stream` + streaming web UI (first words in ~1-2 s)
+- [x] Citation self-check: invalid refs, uncited sentences, unsupported sentences, numbers not in sources
+- [x] Refusal for out-of-scope questions (prompt rule + optional rerank-score threshold)
+- [x] Source cards with PDF links, status badges, "same rule also in"
+
 ## M5 — Query intelligence + versioning
 ## M6 — Generation evals in CI
 ## M7 — Auth, cache, rate limits, Bedrock + fallback, cost tracking

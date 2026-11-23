@@ -35,6 +35,10 @@
   .src details { margin-top:6px; font-size:13px; }
   .src pre { white-space:pre-wrap; font:13px/1.5 ui-monospace,monospace; background:var(--bg); padding:10px; border-radius:6px; max-height:320px; overflow:auto; }
   .err { color:#b00020; }
+  .check { font-size:12px; margin-top:10px; padding:6px 10px; border-radius:8px; display:inline-block; }
+  .check.ok { background:#e8f3ec; color:var(--ok); } .check.warn { background:#fdf3e4; color:var(--warn); }
+  .cursor::after { content:"▍"; animation: blink 1s steps(1) infinite; color:var(--muted); }
+  @keyframes blink { 50% { opacity:0; } }
 </style>
 </head>
 <body>
@@ -87,31 +91,71 @@ function render(md) {
 
 document.querySelectorAll(".examples a").forEach((a) => a.onclick = () => { $("q").value = a.textContent; $("f").requestSubmit(); });
 
+const history = [];   // last few turns, so follow-up questions have context
+
+function sourceCards(sources, cited) {
+  return "<h2>Sources</h2>" + sources.map((s, i) => `
+    <div class="src ${cited.includes(i + 1) ? "cited" : ""}" id="${s.id}">
+      <div class="head"><span class="id">${s.id}</span><span class="title">${esc(s.title)}</span>
+        <span class="badge ${s.status}">${s.status}</span></div>
+      <div class="path">${esc(s.circular_no)} · ${esc(s.issued_on)} · ${esc(s.section_path)} · p. ${esc(s.pages)}
+        ${s.pdf_url ? `· <a href="${esc(s.pdf_url)}" target="_blank" rel="noopener">PDF</a>` : ""}</div>
+      ${s.status !== "active" ? `<div class="path">⚠ ${esc(s.status_reason)}</div>` : ""}
+      ${s.also_in.length ? `<div class="path">Same rule also in: ${esc(s.also_in.join("; "))}</div>` : ""}
+      <details><summary>Show paragraph</summary><pre>${esc(s.text)}</pre></details>
+    </div>`).join("");
+}
+
+function checkBadge(c) {
+  if (c.refused) return `<div class="check ok">No supporting source found, so no answer was made up</div>`;
+  if (c.ok) return `<div class="check ok">✓ Every cited sentence matches its source</div>`;
+  const issues = [];
+  if (c.invalid_refs.length) issues.push(`cites missing source(s) ${c.invalid_refs.map((n) => "S" + n).join(", ")}`);
+  if (c.unsupported_numbers.length) issues.push(`numbers not found in sources: ${c.unsupported_numbers.join(", ")}`);
+  if (c.unsupported_sentences.length) issues.push(`${c.unsupported_sentences.length} sentence(s) weakly supported`);
+  if (c.uncited_sentences.length) issues.push(`${c.uncited_sentences.length} sentence(s) without citation`);
+  return `<div class="check warn">⚠ Check before relying on this: ${esc(issues.join("; "))}</div>`;
+}
+
 $("f").onsubmit = async (e) => {
   e.preventDefault();
   const question = $("q").value.trim();
   if (question.length < 3) return;
   $("go").disabled = true; $("go").textContent = "Thinking…";
-  $("answer").style.display = "block"; $("answer").innerHTML = "<span class='meta'>Searching the RBI documents and drafting an answer…</span>";
+  $("answer").style.display = "block";
+  $("answer").innerHTML = "<span class='meta'>Searching the RBI documents…</span>";
   $("sources").innerHTML = "";
+  let answer = "", sources = [];
   try {
-    const res = await fetch("/ask", {
+    const res = await fetch("/ask/stream", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, entity: $("entity").value || null, include_superseded: $("sup").checked }),
+      body: JSON.stringify({ question, entity: $("entity").value || null, include_superseded: $("sup").checked,
+                             history: history.slice(-4) }),
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || res.statusText);
-    $("answer").innerHTML = render(data.answer) +
-      `<div class="meta">${esc(data.model)} · retrieval ${data.timings_ms.retrieval} ms · generation ${data.timings_ms.generation} ms</div>`;
-    $("sources").innerHTML = "<h2>Sources</h2>" + data.sources.map((s) => `
-      <div class="src ${s.cited ? "cited" : ""}" id="${s.id}">
-        <div class="head"><span class="id">${s.id}</span><span class="title">${esc(s.title)}</span>
-          <span class="badge ${s.status}">${s.status}</span></div>
-        <div class="path">${esc(s.circular_no)} · ${esc(s.issued_on)} · ${esc(s.section_path)} · p. ${esc(s.pages)}</div>
-        ${s.status !== "active" ? `<div class="path">⚠ ${esc(s.status_reason)}</div>` : ""}
-        ${s.also_in.length ? `<div class="path">Same text also in: ${esc(s.also_in.join("; "))}</div>` : ""}
-        <details><summary>Show paragraph</summary><pre>${esc(s.text)}</pre></details>
-      </div>`).join("");
+    if (!res.ok) { const d = await res.json(); throw new Error(d.detail || res.statusText); }
+    // Server-Sent Events over fetch: read the stream, split on blank lines, parse "event:" / "data:" lines
+    const reader = res.body.getReader(); const decoder = new TextDecoder(); let buf = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        const raw = buf.slice(0, idx); buf = buf.slice(idx + 2);
+        const ev = (raw.match(/^event: (.*)$/m) || [])[1];
+        const data = JSON.parse((raw.match(/^data: (.*)$/m) || [])[1] || "null");
+        if (ev === "sources") { sources = data; $("sources").innerHTML = sourceCards(sources, []); }
+        if (ev === "token") { answer += data; $("answer").innerHTML = `<div class="cursor">${render(answer)}</div>`; }
+        if (ev === "error") throw new Error(data);
+        if (ev === "done") {
+          const t = data.timings_ms;
+          $("answer").innerHTML = render(answer) + checkBadge(data.citation_check) +
+            `<div class="meta">${esc(data.model)} · retrieval ${t.retrieval} ms · first word ${t.first_token ?? "–"} ms · total ${t.total} ms</div>`;
+          $("sources").innerHTML = sourceCards(sources, data.cited);
+          history.push({ role: "user", content: question }, { role: "assistant", content: answer });
+        }
+      }
+    }
   } catch (err) {
     $("answer").innerHTML = `<p class="err">${esc(err.message)}</p>`;
   } finally {
