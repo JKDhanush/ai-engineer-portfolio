@@ -1,0 +1,13 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --color-ink: #14213d;
+  --color-accent: #1d4e89;
+  --color-paper: #f6f5f1;
+}
+
+body { background: var(--color-paper); color: #1f2937; }
+
+.cursor::after { content: "▍"; animation: blink 1s steps(1) infinite; color: #9ca3af; margin-left: 2px; }
+@keyframes blink { 50% { opacity: 0; } }

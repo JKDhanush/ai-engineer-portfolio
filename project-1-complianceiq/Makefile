@@ -1,6 +1,6 @@
 # Shortcuts for daily commands. Run from project-1-complianceiq/:  make up, make api, ...
 
-.PHONY: models up down reset ps logs health psql redis api ingest ingest-force test test-all lint golden eval eval-quick eval-gen eval-gate user stats docker-api
+.PHONY: models up down reset ps logs health psql redis api ingest ingest-force test test-all lint golden eval eval-quick eval-gen eval-gate user stats web web-install db-dump load-test docker-api
 
 VENV := backend/.venv/bin
 # Models are already in ~/.cache/huggingface: don't phone home on every start (faster, works offline).
@@ -69,6 +69,19 @@ user:         ## create a login: make user EMAIL=you@example.com ROLE=admin (ask
 
 stats:        ## usage / latency / cost / cache stats for the last 24 h
 	curl -s localhost:8000/admin/stats | jq
+
+web-install:  ## one-time: install the Next.js UI dependencies
+	cd frontend && npm install
+
+web:          ## Next.js UI on http://localhost:3000 (needs `make api` running in another terminal)
+	cd frontend && npm run dev
+
+db-dump:      ## export the database to data/complianceiq.dump (to copy to the server)
+	docker compose exec -T postgres pg_dump -U $${POSTGRES_USER:-complianceiq} -Fc $${POSTGRES_DB:-complianceiq} > data/complianceiq.dump
+	@ls -lh data/complianceiq.dump
+
+load-test:    ## concurrency test against the running API: make load-test URL=http://localhost:8000
+	cd backend && .venv/bin/python ../evals/load_test.py --url $(or $(URL),http://localhost:8000)
 
 models:       ## download / refresh the embedding + reranker models (needs internet)
 	cd backend && .venv/bin/python -c "from ingest.embedder import get_model; from app.rerank import get_reranker; get_model(); get_reranker(); print('models ready')"

@@ -20,10 +20,13 @@ build/
 project-1-complianceiq/data/raw/*
 !project-1-complianceiq/data/raw/.gitkeep
 project-1-complianceiq/data/processed/
+*.dump
 
 # --- Frontend (M8) ---
 node_modules/
 .next/
+next-env.d.ts
+*.tsbuildinfo
 
 # --- Editors / OS ---
 .vscode/

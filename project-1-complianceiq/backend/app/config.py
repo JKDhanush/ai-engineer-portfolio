@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     # Ablation (evals/results/retrieval_report.md): vector+rerank MRR 0.906 at ~1.0 s vs hybrid+rerank 0.906 at ~2.2 s
     retrieval_mode: str = "vector_rerank"
     # Calibrated on the golden set: keeps 100% of answerable questions, refuses 80% of out-of-scope ones
+    rerank_top: int = 20           # candidates the cross-encoder re-scores (fewer = faster on CPU)
     min_rerank_score: float = 0.31
 
     # ---- query intelligence (M5) ----

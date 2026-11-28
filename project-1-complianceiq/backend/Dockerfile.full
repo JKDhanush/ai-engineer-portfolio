@@ -1,0 +1,25 @@
+# Production API image WITH the search models (bge-m3 + reranker) running on the CPU.
+# The slim Dockerfile (no torch) is for local health checks; this one serves real questions on EC2.
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
+    HF_HOME=/models \
+    EMBED_DEVICE=cpu
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+WORKDIR /app
+
+# CPU-only torch first (~200 MB instead of ~2.5 GB with CUDA), then the rest
+RUN uv pip install --system --no-cache --index-url https://download.pytorch.org/whl/cpu torch
+COPY requirements.txt requirements-ingest.txt ./
+RUN uv pip install --system --no-cache -r requirements-ingest.txt
+
+COPY app ./app
+COPY ingest ./ingest
+COPY db ./db
+COPY scripts ./scripts
+
+RUN useradd --create-home --uid 1000 appuser && mkdir -p /models && chown appuser /models
+USER appuser
+EXPOSE 8000
+# One worker: the models take ~4.5 GB of RAM; a second worker would load them twice.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

@@ -237,14 +237,14 @@ async def ask_stream(request: Request, body: AskRequest, user: CurrentUser) -> S
 @app.get("/admin/stats")
 async def admin_stats(request: Request, user: CurrentUser, hours: int = 24) -> dict:
     """Usage, latency, cache hit rate, refusal rate, citation pass rate and cost over the last N hours."""
-    if settings.auth_required:
+    if settings.auth_required or settings.environment != "local":   # public demo: stats stay admin-only
         require_admin(user)
     return await querylog.stats(request.app.state.db, hours)
 
 
 @app.post("/admin/cache/clear")
 async def clear_cache(request: Request, user: CurrentUser) -> dict:
-    if settings.auth_required:
+    if settings.auth_required or settings.environment != "local":   # public demo: stats stay admin-only
         require_admin(user)
     keys = [k async for k in request.app.state.redis.scan_iter("cache:*")]
     if keys:

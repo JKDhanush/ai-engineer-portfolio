@@ -1,0 +1,86 @@
+# Production stack for one EC2 server (m7i-flex.large: 2 vCPU, 8 GB RAM).
+#   caddy (HTTPS, :80/:443) -> /api/* -> api (FastAPI + CPU models)
+#                           -> /*     -> web (Next.js)
+#   api -> postgres (pgvector) + redis (cache, rate limits); LLM = Groq / Bedrock over HTTPS
+# Run from project-1-complianceiq/deploy:  docker compose -f docker-compose.prod.yml up -d --build
+name: complianceiq-prod
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-complianceiq}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-complianceiq}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../backend/db/init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+      - ../data:/backup:ro                     # pg_restore reads the dump from here
+    command: ["postgres", "-c", "shared_buffers=256MB", "-c", "max_connections=50"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-complianceiq}"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Cache-sized memory cap; least-recently-used keys are evicted first
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru", "--save", "300", "10"]
+    volumes: [redisdata:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build: { context: ../backend, dockerfile: Dockerfile.full }
+    restart: unless-stopped
+    env_file: [../.env]
+    environment:
+      ENVIRONMENT: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-complianceiq}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-complianceiq}
+      REDIS_URL: redis://redis:6379/0
+      EMBED_DEVICE: cpu
+      LOAD_EMBEDDER: "true"
+      RERANK_TOP: ${RERANK_TOP:-10}
+      LLM_PROVIDERS: ${LLM_PROVIDERS:-openai_compat}
+    # --root-path: the API sits behind Caddy at /api, so /api/docs (Swagger) finds /api/openapi.json
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--root-path", "/api"]
+    volumes: [models:/models]                  # model files survive rebuilds (downloaded once, ~4.5 GB)
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 600s                       # first start downloads the models
+      retries: 3
+    deploy:
+      resources:
+        limits: { memory: 6g }
+
+  web:
+    build: { context: ../frontend }
+    restart: unless-stopped
+    environment:
+      API_URL: http://api:8000
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?set SITE_ADDRESS in .env, e.g. 13-233-10-20.sslip.io}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data                       # HTTPS certificates
+    depends_on: [api, web]
+
+volumes:
+  pgdata:
+  redisdata:
+  models:
+  caddy_data:

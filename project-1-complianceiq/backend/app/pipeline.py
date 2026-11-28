@@ -113,7 +113,8 @@ async def run(app, *, question: str, history: list[dict], entity: str | None, in
 
     hits = await search(app.state.db, standalone, to_pgvector(qvec), mode=mode, k=k, entity=entity,
                         include_superseded=include_superseded, reranker=reranker,
-                        access_levels=user.access_levels, prefer_active=prefer_active)
+                        access_levels=user.access_levels, prefer_active=prefer_active,
+                        rerank_top=s.rerank_top)
     top = hits[0].score if hits else None
     if mode in RERANK_MODES and hits and hits[0].score < s.min_rerank_score:
         hits = []                               # nothing relevant enough: refuse instead of improvising

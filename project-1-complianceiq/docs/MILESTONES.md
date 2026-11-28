@@ -65,6 +65,20 @@ citations via local Ollama `/ask`, and a minimal web page at `/`. Evals (M2) com
 - [x] Redis answer cache: exact + semantic, invalidated by corpus version (`app/cache.py`)
 - [x] Redis rate limit per user/IP → 429 (`app/ratelimit.py`)
 - [x] `query_log` table + `/admin/stats` (p50/p95, cache hit rate, refusal rate, citation pass rate, cost)
-## M8 — Next.js UI
-## M9 — EC2 deploy + CI/CD + Langfuse
-## M10 — Load test, capacity plan, cost model, demo, README
+## M8 — Next.js UI ✅
+- [x] Next.js 16 + TypeScript + Tailwind (`frontend/`): streaming chat with follow-ups, clickable citations → source panel
+- [x] Citation badge, cache / provider / latency / cost line, superseded notes, entity filter, stop button
+- [x] Login page (JWT), Usage & cost page over `/admin/stats`
+- [x] Production Docker image (standalone output)
+
+## M9 — EC2 deploy + CI/CD ✅ (code) · ⏳ (first deploy)
+- [x] `deploy/`: Compose stack (Caddy HTTPS, Next.js, FastAPI CPU image, Postgres, Redis), EC2 setup script, server Makefile, step-by-step guide
+- [x] GitHub Actions: frontend build job + SSH deploy + smoke test (enabled with `DEPLOY_ENABLED`)
+- [x] Observability: query_log + Usage page (Langfuse deferred, ADR-016)
+- [ ] First deploy on the AWS Free plan account
+
+## M10 — Load test, capacity plan, cost model, demo, README ✅ (tools) · ⏳ (numbers)
+- [x] `evals/load_test.py` (`make load-test`): concurrency levels, first-word / total p50/p95, throughput, 429s, cache share
+- [x] `docs/COST_AND_CAPACITY.md`: cost per question by model, infra vs LLM cost, limits, scaling path
+- [ ] Run the load test on laptop + server and paste the tables; generation eval numbers into the README
+- [ ] Screenshots / short demo GIF in the README

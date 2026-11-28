@@ -128,3 +128,17 @@ Decisions are never deleted; if one changes, a new ADR supersedes it.
 - **Decision:** GitHub Actions runs ruff, the fast unit tests (88), golden-set validation and a Docker build on every push. `evals/run_generation_eval.py` (refusal accuracy, citation pass rate, cited-source hit, LLM-judge correctness / faithfulness / relevance) runs locally with `--gate` before a release and fails below fixed thresholds. Judge reliability is measured against human grades (`judge_agreement.py`, Cohen's kappa).
 - **Alternatives:** running evals in CI against a hosted LLM (costs money and needs the corpus in CI; reconsider in Phase D with a self-hosted runner).
 - **Consequences:** + every push is checked for free; quality numbers are reproducible with one command. − a quality regression is caught at release time, not on the push itself.
+
+## ADR-015: Deploy on one EC2 server (AWS Free plan) with CPU models and a hosted LLM
+- **Date:** 2026-11-28 · **Status:** Accepted
+- **Context:** Budget ₹0. The search models need ~4.5 GB RAM; GPU instances are not free. Since July 2025 the AWS Free plan gives $100-200 credits for 6 months with no charges, and `m7i-flex.large` (8 GB) is eligible.
+- **Decision:** One `m7i-flex.large` in ap-south-1 running Docker Compose: Caddy (HTTPS via Let's Encrypt on an `sslip.io` hostname, no domain needed), Next.js, FastAPI with bge-m3 + reranker on CPU (`RERANK_TOP=10`), Postgres/pgvector, Redis. Answers from Groq's free tier through the existing provider chain. The database is copied from the laptop with `pg_dump` instead of re-ingesting on the server. GitHub Actions deploys over SSH after checks pass and smoke-tests `/api/health`. A budget alert and "stop when idle" keep credits alive.
+- **Alternatives:** ECS/Fargate + RDS + ElastiCache (the production-grade shape, but several times the cost and setup for a demo); Hugging Face Spaces / Vercel (free, but not AWS); Bedrock for answers (kept as a provider; may be unavailable on the Free plan); hosted embeddings (would require re-embedding and re-running the evals).
+- **Consequences:** + a public HTTPS demo at ₹0 on AWS, same containers as local. − single point of failure, no autoscaling; CPU reranking is slower than the laptop GPU; Groq's free tokens-per-minute cap limits sustained throughput (see `docs/COST_AND_CAPACITY.md`).
+
+## ADR-016: Observability from our own query log instead of Langfuse (for now)
+- **Date:** 2026-11-28 · **Status:** Accepted
+- **Context:** The plan listed Langfuse for traces. We already record, per question, the rewritten query, entity, mode, cache result, top score, provider, model, tokens, cost, retrieval/first-token/total latency and the citation result in Postgres, with `/admin/stats` and a UI page on top.
+- **Decision:** Ship with the `query_log` + Usage page; don't add a third-party tracing SDK yet.
+- **Alternatives:** Langfuse Cloud / self-hosted (nicer trace UI and prompt management; another service and another key).
+- **Consequences:** + no extra dependency or data leaving the server. − no per-span trace view; adding Langfuse later means one call in `pipeline.py`'s record step.
