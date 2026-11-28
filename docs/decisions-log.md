@@ -92,6 +92,7 @@ Decisions are never deleted; if one changes, a new ADR supersedes it.
 - **Decision:** Re-score the top 30 fused child chunks with `BAAI/bge-reranker-v2-m3` (fp16 on the GPU, ~1.1 GB), then group into parents. The ablation table in `evals/results/retrieval_report.md` must show it earns its latency.
 - **Alternatives:** LLM reranking (slower, costs tokens); no reranking (simpler, lower precision at rank 1).
 - **Consequences:** + higher Hit@1 / MRR, so the LLM sees the right rule first. − ~1.1 GB more VRAM (6 GB card: embedder + reranker + LLM is tight; `USE_RERANKER=false` turns it off) and extra latency per query.
+- **Result (2026-11-23, RTX 3050, 165 questions):** BM25 MRR 0.437 · vector 0.873 · hybrid RRF 0.761 · weighted hybrid 0.836 · vector+rerank **0.906** (Hit@1 0.867, Hit@5 0.958, p50 1.0 s) · hybrid+rerank 0.906 (p50 2.2 s). Equal-weight RRF *hurt* (weak keyword hits displace good vector hits); once the reranker is in, keyword search adds nothing. **Default: `vector_rerank`.** Refusal threshold `MIN_RERANK_SCORE=0.31` (answerable median top score 0.986, out-of-scope 0.008).
 
 ## ADR-010: Streaming answers, deterministic citation self-check, refusal
 - **Date:** 2026-11-23 · **Status:** Accepted
@@ -99,3 +100,31 @@ Decisions are never deleted; if one changes, a new ADR supersedes it.
 - **Decision:** `/ask/stream` sends Server-Sent Events (sources first, then tokens, then a `done` event with timings). Every answer is checked by `app/citations.py`: cited sources must exist, sentences need citations, cited sentences' terms and **numbers** must appear in the cited sources. Out-of-scope questions get a fixed refusal; an optional rerank-score threshold refuses before calling the LLM.
 - **Alternatives:** WebSockets (bidirectional, not needed); an LLM-judge on every request (doubles latency and cost; used offline in the M6 evals instead).
 - **Consequences:** + time-to-first-word ~1-2 s, visible warnings on doubtful answers, no invented numbers going unnoticed. − the lexical check can flag correct paraphrases; it warns, it doesn't block.
+
+## ADR-011: LLM provider chain with fallback and per-query cost
+- **Date:** 2026-11-23 · **Status:** Accepted
+- **Context:** The local model (phi4-mini on a 6 GB GPU) is free but slow and sometimes unavailable (VRAM, laptop off). In the cloud (Phase D) a free-tier server has no GPU, so a hosted model is needed. Costs must be visible per query.
+- **Decision:** `app/providers.py` puts every model behind one interface (`complete`, `stream`, token `Usage`): Ollama, any OpenAI-compatible API (Groq / OpenRouter / Gemini-compatible), and AWS Bedrock (Converse API). `LLM_PROVIDERS=ollama,openai_compat` is an ordered chain: on an error the next provider is tried. Streaming falls back **only before the first token** (switching models mid-answer would garble it). Each answer records provider, model, tokens and `cost_usd` (prices per 1M tokens in `LLM_PRICES_JSON`).
+- **Alternatives:** LiteLLM (does all of this, but hides the mechanics we want to show and adds a large dependency); a single hard-coded provider.
+- **Consequences:** + same code runs on the laptop (free) and in AWS (Bedrock), resilience to one provider failing, cost per query in `/admin/stats`. − we maintain three small adapters; prices must be updated by hand.
+
+## ADR-012: JWT auth, document ACL in SQL, Redis cache and rate limits
+- **Date:** 2026-11-23 · **Status:** Accepted
+- **Context:** A real compliance tool needs logins, must never show a user a document they aren't cleared for, must not let one client exhaust the GPU/API budget, and answers the same questions repeatedly.
+- **Decision:** bcrypt password hashes + signed JWTs (stateless: any API replica can verify). Access control is a `WHERE access_level = ANY(user_levels)` inside the retrieval SQL, so restricted text never reaches the LLM. Redis: fixed-window rate limit per user/IP (atomic `INCR`); answer cache with exact match and semantic match (cosine ≥ 0.95 on the question embedding), keyed by filters + ACL + **corpus version** so re-ingestion invalidates it; only answers that pass the citation check are cached; follow-ups are never cached. Every query is logged to `query_log` (latency, tokens, cost, cache, refusal, citation result). Redis/log failures fail **open** (the request still works). The API refuses to start with the default JWT secret when auth is on or outside local dev.
+- **Alternatives:** sessions in Redis (stateful); filtering ACL after retrieval (leaks via the LLM, wastes top-k slots); a vector database for the semantic cache (overkill at this size: a linear scan of ≤2000 entries takes ~1 ms).
+- **Consequences:** + repeated questions answered in ~5 ms at zero cost, per-user fairness, auditable usage. − JWTs can't be revoked before expiry (kept short: 8 h); fixed windows allow bursts at window edges.
+
+## ADR-013: Query understanding and version preference
+- **Date:** 2026-11-23 · **Status:** Accepted
+- **Context:** Users write "what about NBFCs?" after a question; they name entities in passing; the corpus holds both the repealed 2016 Master Direction and the 2025 Directions with the same rules in slightly different words.
+- **Decision:** `app/router.py`: regex entity detection (cheap, predictable) sets the entity filter when the user didn't; follow-ups (short or with pronouns, and only when there is history) are rewritten into a standalone question by the LLM before retrieval; a version-intent regex ("2016", "repealed", "what changed") decides whether superseded documents may lead. Otherwise, when the same rule appears in a superseded and an active document, the **active copy replaces it** in the results and the superseded one is listed under "also in", and the answer carries a note. Multi-query and HyDE expansion exist behind `QUERY_EXPANSION` and stay **off** until an ablation shows they help (vector+rerank already reaches Hit@5 0.958).
+- **Alternatives:** an LLM classifier for every query (adds ~1 s and a failure point for something regex handles); dropping superseded documents (loses "what changed" questions).
+- **Consequences:** + follow-ups work, current rules are preferred, history questions still work. − the rewrite costs one extra LLM call on follow-ups; regexes need extending for new entity types.
+
+## ADR-014: Two-level evaluation: deterministic gates in CI, model-based evals before release
+- **Date:** 2026-11-23 · **Status:** Accepted
+- **Context:** CI runners have no GPU, no corpus and no free LLM; full evals take minutes on the laptop.
+- **Decision:** GitHub Actions runs ruff, the fast unit tests (88), golden-set validation and a Docker build on every push. `evals/run_generation_eval.py` (refusal accuracy, citation pass rate, cited-source hit, LLM-judge correctness / faithfulness / relevance) runs locally with `--gate` before a release and fails below fixed thresholds. Judge reliability is measured against human grades (`judge_agreement.py`, Cohen's kappa).
+- **Alternatives:** running evals in CI against a hosted LLM (costs money and needs the corpus in CI; reconsider in Phase D with a self-hosted runner).
+- **Consequences:** + every push is checked for free; quality numbers are reproducible with one command. − a quality regression is caught at release time, not on the push itself.

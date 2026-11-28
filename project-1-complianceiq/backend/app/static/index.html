@@ -39,12 +39,26 @@
   .check.ok { background:#e8f3ec; color:var(--ok); } .check.warn { background:#fdf3e4; color:var(--warn); }
   .cursor::after { content:"▍"; animation: blink 1s steps(1) infinite; color:var(--muted); }
   @keyframes blink { 50% { opacity:0; } }
+  #login { display:none; border:1px solid var(--line, #ddd); border-radius:10px; padding:14px; margin:12px 0; }
+  #login input { margin-right:6px; padding:6px; }
+  .note { font-size:13px; color:var(--warn); margin:6px 0; }
+  .pill { font-size:11px; padding:1px 7px; border-radius:99px; border:1px solid currentColor; margin-left:4px; }
+  .topbar { display:flex; justify-content:space-between; align-items:baseline; }
+  .linkbtn { background:none; border:none; color:var(--muted); cursor:pointer; text-decoration:underline; font-size:13px; }
 </style>
 </head>
 <body>
 <main>
-  <h1>ComplianceIQ</h1>
+  <div class="topbar"><h1>ComplianceIQ</h1>
+    <span><span id="who" class="meta"></span> <button class="linkbtn" id="newchat" type="button">New chat</button></span></div>
   <p class="sub">Ask about RBI KYC / AML rules. Answers cite the exact circular and paragraph.</p>
+
+  <form id="login">
+    <b>Sign in</b> <span class="meta">(this server requires login)</span><br><br>
+    <input id="email" type="email" placeholder="email" autocomplete="username">
+    <input id="password" type="password" placeholder="password" autocomplete="current-password">
+    <button type="submit">Sign in</button> <span id="loginerr" class="err"></span>
+  </form>
 
   <form id="f">
     <textarea id="q" placeholder="e.g. How often must banks update KYC for high-risk customers?"></textarea>
@@ -92,6 +106,28 @@ function render(md) {
 document.querySelectorAll(".examples a").forEach((a) => a.onclick = () => { $("q").value = a.textContent; $("f").requestSubmit(); });
 
 const history = [];   // last few turns, so follow-up questions have context
+let token = null;
+try { token = localStorage.getItem("ciq_token"); } catch (_) { /* storage can be unavailable: stay logged out */ }
+const authHeaders = () => (token ? { Authorization: "Bearer " + token } : {});
+
+async function whoami() {
+  const r = await fetch("/auth/me", { headers: authHeaders() });
+  if (r.status === 401) { token = null; $("login").style.display = "block"; $("who").textContent = ""; return; }
+  const u = await r.json();
+  $("login").style.display = "none";
+  $("who").textContent = u.email === "anonymous" ? "" : `${u.email} (${u.role})`;
+}
+$("login").onsubmit = async (e) => {
+  e.preventDefault();
+  const r = await fetch("/auth/login", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: $("email").value, password: $("password").value }) });
+  if (!r.ok) { $("loginerr").textContent = "Wrong email or password"; return; }
+  token = (await r.json()).access_token;
+  try { localStorage.setItem("ciq_token", token); } catch (_) {}
+  $("loginerr").textContent = ""; whoami();
+};
+$("newchat").onclick = () => { history.length = 0; $("answer").style.display = "none"; $("sources").innerHTML = ""; $("q").value = ""; };
+whoami();
 
 function sourceCards(sources, cited) {
   return "<h2>Sources</h2>" + sources.map((s, i) => `
@@ -128,11 +164,13 @@ $("f").onsubmit = async (e) => {
   let answer = "", sources = [];
   try {
     const res = await fetch("/ask/stream", {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify({ question, entity: $("entity").value || null, include_superseded: $("sup").checked,
                              history: history.slice(-4) }),
     });
+    if (res.status === 401) { whoami(); throw new Error("Please sign in first."); }
     if (!res.ok) { const d = await res.json(); throw new Error(d.detail || res.statusText); }
+    let meta = {};
     // Server-Sent Events over fetch: read the stream, split on blank lines, parse "event:" / "data:" lines
     const reader = res.body.getReader(); const decoder = new TextDecoder(); let buf = "";
     while (true) {
@@ -144,13 +182,21 @@ $("f").onsubmit = async (e) => {
         const raw = buf.slice(0, idx); buf = buf.slice(idx + 2);
         const ev = (raw.match(/^event: (.*)$/m) || [])[1];
         const data = JSON.parse((raw.match(/^data: (.*)$/m) || [])[1] || "null");
+        if (ev === "meta") { meta = data; }
         if (ev === "sources") { sources = data; $("sources").innerHTML = sourceCards(sources, []); }
         if (ev === "token") { answer += data; $("answer").innerHTML = `<div class="cursor">${render(answer)}</div>`; }
         if (ev === "error") throw new Error(data);
         if (ev === "done") {
           const t = data.timings_ms;
+          const understood = [];
+          if (meta.standalone_question && meta.standalone_question !== question) understood.push(`searched for: “${esc(meta.standalone_question)}”`);
+          if (meta.entity && !$("entity").value) understood.push(`entity detected: ${esc(meta.entity)}`);
+          const cache = data.cache !== "miss" ? `<span class="pill">cache: ${esc(data.cache)}</span>` : "";
+          const cost = data.cost_usd ? ` · $${data.cost_usd.toFixed(5)}` : "";
           $("answer").innerHTML = render(answer) + checkBadge(data.citation_check) +
-            `<div class="meta">${esc(data.model)} · retrieval ${t.retrieval} ms · first word ${t.first_token ?? "–"} ms · total ${t.total} ms</div>`;
+            data.notes.map((n) => `<div class="note">ⓘ ${esc(n)}</div>`).join("") +
+            (understood.length ? `<div class="meta">${understood.join(" · ")}</div>` : "") +
+            `<div class="meta">${esc(data.provider ?? "")} ${esc(data.model ?? "")}${cache} · retrieval ${t.retrieval} ms · first word ${t.first_token ?? "–"} ms · total ${t.total} ms${cost}</div>`;
           $("sources").innerHTML = sourceCards(sources, data.cited);
           history.push({ role: "user", content: question }, { role: "assistant", content: answer });
         }

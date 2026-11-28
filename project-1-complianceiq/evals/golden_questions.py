@@ -10,6 +10,9 @@ Target syntax:  "42" = Para 42 of the CB directions;  "Annex I|5" = Para 5 of An
 Question styles are mixed on purpose: plain-English paraphrases (tests semantic search), exact terms and
 numbers (tests keyword search), entity-specific questions, and unanswerable ones (tests refusal).
 Fields: (id, question, category, difficulty, targets, expected_answer)
+
+Label changes after the first ablation (2026-11-23) — only where the retrieved paragraph genuinely answers:
+  def-09 + Para 65 (the CKYCR paragraph itself), cdd-02 + Para 76 ("Quoting of PAN").
 """
 
 Q = [
@@ -37,7 +40,7 @@ Q = [
     ("def-08", "Who can certify documents for NRIs and PIOs opening accounts?", "definitions", "medium", ["5"],
      "Overseas branches of Indian SCBs, overseas banks with relationships, Notary Public abroad, Court Magistrate, Judge, "
      "Indian Embassy / Consulate."),
-    ("def-09", "What is the CKYCR?", "definitions", "easy", ["5"],
+    ("def-09", "What is the CKYCR?", "definitions", "easy", ["5", "65"],
      "Central KYC Records Registry: receives, stores, safeguards and retrieves customers' KYC records digitally."),
     ("def-10", "What is a KYC Identifier?", "definitions", "easy", ["5"], "Unique number or code that CKYCR assigns to a customer."),
     ("def-11", "Define digital KYC.", "definitions", "easy", ["5"],
@@ -129,7 +132,7 @@ Q = [
     # ---------------------------------------------------------------- CDD individuals
     ("cdd-01", "What documents does a bank collect from an individual for CDD?", "cdd_individual", "easy", ["23"],
      "Aadhaar / proof of possession / OVD or KYC Identifier, plus PAN or Form 60, plus other documents as required."),
-    ("cdd-02", "Is PAN mandatory for opening an account?", "cdd_individual", "medium", ["23"],
+    ("cdd-02", "Is PAN mandatory for opening an account?", "cdd_individual", "medium", ["23", "76"],
      "PAN or its equivalent e-document, or Form No. 60, is required."),
     ("cdd-03", "Can a customer give a different current address than the one in Aadhaar?", "cdd_individual", "medium",
      ["23"], "Yes, by giving a self-declaration to the bank."),

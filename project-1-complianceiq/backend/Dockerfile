@@ -15,6 +15,8 @@ COPY requirements.txt .
 RUN uv pip install --system --no-cache -r requirements.txt
 
 COPY app ./app
+# SQL migrations: the API applies them at startup
+COPY db ./db
 
 # Never run as root inside a container
 RUN useradd --create-home --uid 1000 appuser

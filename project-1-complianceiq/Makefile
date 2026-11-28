@@ -1,6 +1,6 @@
 # Shortcuts for daily commands. Run from project-1-complianceiq/:  make up, make api, ...
 
-.PHONY: models up down reset ps logs health psql redis api ingest ingest-force test test-all lint golden eval eval-quick docker-api
+.PHONY: models up down reset ps logs health psql redis api ingest ingest-force test test-all lint golden eval eval-quick eval-gen eval-gate user stats docker-api
 
 VENV := backend/.venv/bin
 # Models are already in ~/.cache/huggingface: don't phone home on every start (faster, works offline).
@@ -57,6 +57,18 @@ eval:         ## retrieval ablation: bm25 / vector / hybrid / hybrid+rerank (sto
 
 eval-quick:   ## first 30 questions, the two rerank modes
 	cd backend && $(OFFLINE) .venv/bin/python ../evals/run_retrieval_eval.py --modes vector_rerank,hybrid_rerank --limit 30
+
+eval-gen:     ## generation eval on 40 questions + LLM judge (needs `make api` running in another terminal)
+	cd backend && $(OFFLINE) .venv/bin/python ../evals/run_generation_eval.py --limit 40 --labels 30
+
+eval-gate:    ## full generation eval, exits non-zero if quality drops below the gates (run before a release)
+	cd backend && $(OFFLINE) .venv/bin/python ../evals/run_generation_eval.py --gate
+
+user:         ## create a login: make user EMAIL=you@example.com ROLE=admin (asks for the password)
+	cd backend && .venv/bin/python scripts/create_user.py $(EMAIL) --role $(or $(ROLE),analyst)
+
+stats:        ## usage / latency / cost / cache stats for the last 24 h
+	curl -s localhost:8000/admin/stats | jq
 
 models:       ## download / refresh the embedding + reranker models (needs internet)
 	cd backend && .venv/bin/python -c "from ingest.embedder import get_model; from app.rerank import get_reranker; get_model(); get_reranker(); print('models ready')"

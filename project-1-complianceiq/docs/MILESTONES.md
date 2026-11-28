@@ -27,7 +27,7 @@
 - [x] Parent-child chunking + contextual headers + tables + amendment footnotes (`ingest/chunker.py`)
 - [x] Dedupe: file SHA-256 (idempotent ingest) + chunk content hash (collapsed at retrieval)
 - [x] bge-m3 embeddings on GPU + transactional load into Postgres (`scripts/ingest.py`, `ingest/loader.py`)
-- [~] Version status: simple rule (pre-repeal 2016 MD family / 'Withdrawn' stamp = superseded). Full graph in M5
+- [x] Version status: pre-repeal 2016 MD family / 'Withdrawn' stamp = superseded; active copies preferred in M5
 
 **MVP slice (pulled forward):** hybrid search (pgvector + full-text, RRF) `/search`, grounded answers with
 citations via local Ollama `/ask`, and a minimal web page at `/`. Evals (M2) come next to measure it.
@@ -48,9 +48,23 @@ citations via local Ollama `/ask`, and a minimal web page at `/`. Evals (M2) com
 - [x] Refusal for out-of-scope questions (prompt rule + optional rerank-score threshold)
 - [x] Source cards with PDF links, status badges, "same rule also in"
 
-## M5 — Query intelligence + versioning
-## M6 — Generation evals in CI
-## M7 — Auth, cache, rate limits, Bedrock + fallback, cost tracking
+## M5 — Query intelligence + versioning ✅
+- [x] Entity detection from the question (`app/router.py`), user default entity
+- [x] Follow-up rewriting into a standalone question (only with chat history)
+- [x] Version intent: history questions keep superseded docs; otherwise the active copy replaces a superseded duplicate + note
+- [x] Optional multi-query / HyDE expansion (`QUERY_EXPANSION`, off by default)
+
+## M6 — Generation evals in CI ✅
+- [x] `evals/run_generation_eval.py`: refusal accuracy, citation pass rate, cited-source hit, LLM-judge correctness / faithfulness / relevance, `--gate`
+- [x] Human-label sheet + judge agreement (Cohen's kappa): `evals/judge_agreement.py`
+- [x] GitHub Actions: ruff + fast tests + golden-set validation + Docker build (`.github/workflows/complianceiq-ci.yml`)
+
+## M7 — Auth, cache, rate limits, Bedrock + fallback, cost tracking ✅
+- [x] Provider chain Ollama → OpenAI-compatible → Bedrock with fallback, token usage, cost per query (`app/providers.py`)
+- [x] JWT login, users table, roles, document ACL inside the retrieval SQL (`app/auth.py`, `make user`)
+- [x] Redis answer cache: exact + semantic, invalidated by corpus version (`app/cache.py`)
+- [x] Redis rate limit per user/IP → 429 (`app/ratelimit.py`)
+- [x] `query_log` table + `/admin/stats` (p50/p95, cache hit rate, refusal rate, citation pass rate, cost)
 ## M8 — Next.js UI
 ## M9 — EC2 deploy + CI/CD + Langfuse
 ## M10 — Load test, capacity plan, cost model, demo, README

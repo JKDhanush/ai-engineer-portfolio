@@ -36,10 +36,11 @@ NEAR_DUP = 0.85       # word-shingle Jaccard above which two paragraphs count as
 
 _ENTITY_FILTER = "($2::text IS NULL OR d.metadata->>'entity_type' IN ($2, 'all_REs', 'payment_systems'))"
 _STATUS_FILTER = "($4::bool OR d.status = 'active')"
+_ACL_FILTER = "($5::text[] IS NULL OR d.access_level = ANY($5::text[]))"   # document access control (M7)
 
 VECTOR_SQL = f"""
 SELECT c.id FROM chunks c JOIN documents d ON d.id = c.document_id
-WHERE c.chunk_level = 'child' AND {_ENTITY_FILTER} AND {_STATUS_FILTER}
+WHERE c.chunk_level = 'child' AND {_ENTITY_FILTER} AND {_STATUS_FILTER} AND {_ACL_FILTER}
 ORDER BY c.embedding <=> $1::vector
 LIMIT $3"""
 
@@ -48,7 +49,7 @@ KEYWORD_SQL = f"""
 WITH q AS (SELECT NULLIF(replace(plainto_tsquery('english', $1)::text, '&', '|'), '') AS t)
 SELECT c.id FROM chunks c JOIN documents d ON d.id = c.document_id, q
 WHERE q.t IS NOT NULL AND c.chunk_level = 'child' AND c.tsv @@ to_tsquery('english', q.t)
-  AND {_ENTITY_FILTER} AND {_STATUS_FILTER}
+  AND {_ENTITY_FILTER} AND {_STATUS_FILTER} AND {_ACL_FILTER}
 ORDER BY ts_rank_cd(c.tsv, to_tsquery('english', q.t)) DESC
 LIMIT $3"""
 
@@ -108,6 +109,7 @@ async def search(
     pool: asyncpg.Pool, query: str, query_vec: str | None, *, mode: str = "hybrid", k: int = 5,
     entity: str | None = None, include_superseded: bool = True,
     reranker: Callable[[str, list[str]], list[float]] | None = None, rerank_top: int = RERANK_TOP,
+    access_levels: list[str] | None = None, prefer_active: bool = True,
 ) -> list[Hit]:
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}")
@@ -117,11 +119,11 @@ async def search(
         lists, weights = [], []
         if use_vector:
             lists.append([r["id"] for r in await conn.fetch(VECTOR_SQL, query_vec, entity, CANDIDATES,
-                                                            include_superseded)])
+                                                            include_superseded, access_levels)])
             weights.append(1.0)
         if use_keyword:
             lists.append([r["id"] for r in await conn.fetch(KEYWORD_SQL, query, entity, CANDIDATES,
-                                                            include_superseded)])
+                                                            include_superseded, access_levels)])
             weights.append(BM25_WEIGHT if mode == "hybrid_weighted" else 1.0)
         fused = rrf(*lists, weights=weights)
         ranked = sorted(fused, key=fused.get, reverse=True)
@@ -135,36 +137,45 @@ async def search(
         rerank_scores = await asyncio.to_thread(reranker, query, passages)  # GPU work off the event loop
         scores = {c: s for c, s in zip(top, rerank_scores, strict=True)}
         ranked = sorted(top, key=scores.get, reverse=True)
-    return _group(ranked, rows, scores, k)
+    return _group(ranked, rows, scores, k, prefer_active)
 
 
-def _group(ranked: list, rows: dict, scores: dict, k: int) -> list[Hit]:
-    """Children best-first -> distinct parents. The same rule repeated in several entity directions is kept
-    once (best-ranked copy), with the other copies listed in `also_in`, so the LLM sees k DIFFERENT rules."""
+def _hit(r, score: float) -> Hit:
+    pages = f"{r['page_start']}" if r["page_start"] == r["page_end"] else f"{r['page_start']}-{r['page_end']}"
+    return Hit(parent_id=str(r["parent_id"]), score=float(score), doc_id=r["doc_id"], title=r["title"],
+               circular_no=r["circular_no"], issued_on=r["issued_on"].isoformat() if r["issued_on"] else None,
+               status=r["status"], status_reason=r["status_reason"], entity_type=r["entity_type"],
+               section_path=r["section_path"], pages=pages, pdf_url=r["pdf_url"], parent_text=r["parent_text"],
+               matched_text=r["child_text"])
+
+
+def _group(ranked: list, rows: dict, scores: dict, k: int, prefer_active: bool = True) -> list[Hit]:
+    """Children best-first -> distinct parents. The same rule repeated in several documents is kept once, with
+    the other copies listed in `also_in`, so the LLM sees k DIFFERENT rules. With `prefer_active`, an active copy
+    replaces a superseded one (the 2016 Master Direction's wording loses to the 2025 Directions' wording)."""
     hits: list[Hit] = []
-    by_parent: dict = {}
+    seen_parents: set = set()
     shingles: list[set] = []
     for cid in ranked:
         r = rows[cid]
-        if r["parent_id"] in by_parent:                 # another child of a paragraph we already have
+        if r["parent_id"] in seen_parents:              # another child of a paragraph we already have
             continue
+        seen_parents.add(r["parent_id"])
         sh = _shingles(r["parent_text"])
-        dup = next((h for h, s in zip(hits, shingles, strict=True) if _jaccard(sh, s) >= NEAR_DUP), None)
-        if dup is not None:
-            if r["title"] != dup.title and r["title"] not in dup.also_in:
+        idx = next((i for i, s in enumerate(shingles) if _jaccard(sh, s) >= NEAR_DUP), None)
+        if idx is not None:
+            dup = hits[idx]
+            if prefer_active and dup.status != "active" and r["status"] == "active":
+                new = _hit(r, dup.score)
+                new.also_in = [t for t in [dup.title, *dup.also_in] if t != new.title]
+                hits[idx], shingles[idx] = new, sh
+            elif r["title"] != dup.title and r["title"] not in dup.also_in:
                 dup.also_in.append(r["title"])
             continue
         if len(hits) >= k:
             continue
-        pages = f"{r['page_start']}" if r["page_start"] == r["page_end"] else f"{r['page_start']}-{r['page_end']}"
-        hit = Hit(
-            parent_id=str(r["parent_id"]), score=float(scores[cid]), doc_id=r["doc_id"], title=r["title"],
-            circular_no=r["circular_no"], issued_on=r["issued_on"].isoformat() if r["issued_on"] else None,
-            status=r["status"], status_reason=r["status_reason"], entity_type=r["entity_type"],
-            section_path=r["section_path"], pages=pages, pdf_url=r["pdf_url"], parent_text=r["parent_text"],
-            matched_text=r["child_text"],
-        )
-        hits.append(hit)
+        hits.append(_hit(r, scores[cid]))
         shingles.append(sh)
-        by_parent[r["parent_id"]] = hit
+    if prefer_active:      # current rules first; superseded ones stay for context (stable sort keeps score order)
+        hits.sort(key=lambda h: h.status != "active")
     return hits
